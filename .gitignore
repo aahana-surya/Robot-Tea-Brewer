@@ -1,0 +1,31 @@
+# ROS 2 / colcon build artifacts
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# MuJoCo
+MUJOCO_LOG.TXT
+
+# Model weights / large binaries (download or regenerate instead of committing)
+weights/
+*.pt
+*.pth
+*.onnx
+*.engine
+*.ckpt
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
