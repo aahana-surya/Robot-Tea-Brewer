@@ -131,7 +131,7 @@ class TagLocalizer(Node):
         self.publish_img(annotated, msg.header)
 
     def publish_img(self, img, header):
-        self.pub_img.publish(self.bridge.cv2_to_imgmsg(img, 'bgr8', header=header))
+        self.pub_img.publish(self.bridge.cv2_to_imgmsg(img, header=header))
         if self.show:
             cv2.imshow('tag_localizer', img)
             cv2.waitKey(1)
