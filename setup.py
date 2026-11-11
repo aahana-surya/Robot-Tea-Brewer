@@ -27,6 +27,7 @@ setup(
             'head_scan = robot_tea_brewer.head_scan:main',
             'tag_localizer = robot_tea_brewer.tag_localizer:main',
             'pregrasp = robot_tea_brewer.pregrasp:main',
+            'yolo_basic = robot_tea_brewer.yolo_basic:main',
         ],
     },
 )
