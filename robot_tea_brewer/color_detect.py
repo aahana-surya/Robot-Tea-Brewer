@@ -1,8 +1,9 @@
-"""Simple HSV color detection for the green tea-bag tag."""
+"""Simple HSV color detection for the cream tea bag and its green tag."""
 import cv2
 import numpy as np
 
 # OpenCV HSV: H 0-179, S/V 0-255
+CREAM = ((0, 0, 170), (179, 60, 255))     # low saturation, bright
 GREEN = ((45, 120, 80), (85, 255, 255))   # tag rgba .1 .7 .2
 
 
@@ -22,6 +23,31 @@ def _blobs(frame_bgr, lo, hi, min_area, max_area):
         out.append({'bbox': [x, y, x + w, y + h], 'area': area,
                     'fill': fill, 'circ': circ})
     return out
+
+
+def detect_tea_bag(frame_bgr, min_area=40, max_area=3000):
+    """Return detections [{label, conf, bbox, center}], best first.
+
+    The tea bag is the cream blob that is rectangular. A green tag blob
+    close to a cream blob raises confidence.
+    """
+    creams = [b for b in _blobs(frame_bgr, *CREAM, min_area, max_area)
+              if b['fill'] > 0.5 and b['circ'] < 0.9]
+    greens = _blobs(frame_bgr, *GREEN, max(8, min_area // 6), max_area)
+    dets = []
+    for b in creams:
+        x1, y1, x2, y2 = b['bbox']
+        size = max(x2 - x1, y2 - y1)
+        near_tag = any(
+            abs((g['bbox'][0] + g['bbox'][2]) / 2 - (x1 + x2) / 2) < 12 * size and
+            abs((g['bbox'][1] + g['bbox'][3]) / 2 - (y1 + y2) / 2) < 12 * size
+            for g in greens)
+        dets.append({'label': 'tea bag (color)',
+                     'conf': 0.9 if near_tag else 0.6,
+                     'bbox': [float(v) for v in b['bbox']],
+                     'center': [(x1 + x2) / 2, (y1 + y2) / 2]})
+    dets.sort(key=lambda d: -d['conf'])
+    return dets
 
 
 def detect_tag(frame_bgr, min_area=6, max_area=5000):

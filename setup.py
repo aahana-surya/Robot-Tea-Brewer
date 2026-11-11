@@ -24,6 +24,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'tea_bag_detector = robot_tea_brewer.tea_bag_detector:main',
             'head_scan = robot_tea_brewer.head_scan:main',
             'tag_localizer = robot_tea_brewer.tag_localizer:main',
             'pregrasp = robot_tea_brewer.pregrasp:main',
