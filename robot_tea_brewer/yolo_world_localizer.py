@@ -127,7 +127,8 @@ class YoloWorldLocalizer(Node):
                                    throttle_duration_sec=3.0)
             return
         self.last_t = now
-        frame = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
+        # frame = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
+        frame = self.bridge.imgmsg_to_cv2(msg)
         h, w = frame.shape[:2]
         img = cv2.rotate(frame, self.cv_rot) if self.cv_rot is not None else frame
         res = self.model.predict(img, conf=min(c for _, c in self.cfg.values()),
@@ -165,7 +166,8 @@ class YoloWorldLocalizer(Node):
                 f'{prompt!r} conf={float(b.conf):.2f} @ {self.target}: '
                 f'{p[0]:.3f} {p[1]:.3f} {p[2]:.3f}', throttle_duration_sec=1.0)
         # explicit encoding so rqt_image_view can display it (plain 8UC3 isn't a color format)
-        self.pub_img.publish(self.bridge.cv2_to_imgmsg(annotated, encoding='bgr8', header=msg.header))
+        # self.pub_img.publish(self.bridge.cv2_to_imgmsg(annotated, encoding='bgr8', header=msg.header))
+        self.pub_img.publish(self.bridge.cv2_to_imgmsg(annotated, header=msg.header))
         if self.show:
             cv2.imshow('yolo_world_localizer', annotated)
             cv2.waitKey(1)
