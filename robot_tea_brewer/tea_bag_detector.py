@@ -28,7 +28,9 @@ class TeaBagDetector(Node):
         self.declare_parameter('conf', 0.05)  # sim renders: keep low
         self.declare_parameter('device', '')  # '' = auto, or 'cpu' / 'cuda:0'
         self.declare_parameter('show', False)
-        self.declare_parameter('color_fallback', True)  # HSV if YOLO finds nothing
+        # Extra classes so the model labels the robot etc. as that, not as a tea bag
+        self.declare_parameter('distractors', ['robot', 'robot arm', 'gripper', 'camera', 'cup', 'table'])
+        self.declare_parameter('color_fallback', False)  # HSV if YOLO finds nothing
         self.declare_parameter('rotate', 0)  # 0/90/180/270 deg clockwise
 
         p = self.get_parameter
@@ -39,9 +41,10 @@ class TeaBagDetector(Node):
         self.rotate = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180,
                        270: cv2.ROTATE_90_COUNTERCLOCKWISE}.get(p('rotate').value)
         self.prompts = list(p('prompts').value)
+        self.n_target = len(self.prompts)  # classes after these are distractors
 
         self.model = YOLOWorld(p('model').value)
-        self.model.set_classes(self.prompts)  # open-vocabulary prompt(s)
+        self.model.set_classes(self.prompts + list(p('distractors').value))  # open-vocabulary prompt(s)
         self.bridge = CvBridge()
 
         self.create_subscription(
@@ -61,6 +64,8 @@ class TeaBagDetector(Node):
 
         dets = []
         for box in res.boxes:
+            if int(box.cls) >= self.n_target:
+                continue  # best match was a distractor class
             x1, y1, x2, y2 = box.xyxy[0].tolist()
             dets.append({
                 'label': self.prompts[int(box.cls)],
@@ -70,7 +75,12 @@ class TeaBagDetector(Node):
             })
         dets.sort(key=lambda d: d['conf'], reverse=True)
 
-        annotated = res.plot()
+        annotated = frame.copy()
+        for d in dets:
+            x1, y1, x2, y2 = (int(v) for v in d['bbox'])
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(annotated, f"{d['label']} {d['conf']:.2f}", (x1, max(y1 - 4, 10)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
         if not dets and self.color_fallback:
             dets = detect_tea_bag(frame)
             for d in dets:

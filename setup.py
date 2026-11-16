@@ -29,6 +29,7 @@ setup(
             'tag_localizer = robot_tea_brewer.tag_localizer:main',
             'pregrasp = robot_tea_brewer.pregrasp:main',
             'yolo_basic = robot_tea_brewer.yolo_basic:main',
+            'yolo_world_localizer = robot_tea_brewer.yolo_world_localizer:main',
         ],
     },
 )

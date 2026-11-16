@@ -1,6 +1,7 @@
 """ROS 2 node: move Stretch's gripper to a hover point above the tea-bag tag.
 
-Reads the tag position from `tea_tag/position` (stage 1), then:
+Reads the tag position from `tea_bag/position` (published by
+yolo_world_localizer, base_link frame), then:
   1. points the wrist down (pitch -1.57, yaw 0),
   2. drives the base forward/back so the gripper is level with the tag in x,
   3. raises the lift to the hover height (clear of the table),
@@ -20,6 +21,7 @@ from geometry_msgs.msg import PointStamped, Twist
 from rclpy.action import ActionClient
 from rclpy.duration import Duration as RclDuration
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from rclpy.time import Time
 from sensor_msgs.msg import JointState
 from std_msgs.msg import String
@@ -58,8 +60,11 @@ def plan_pregrasp(tag_b, grasp_b, lift, ext, hover, arm_axis):
 
 class Pregrasp(Node):
     def __init__(self):
-        super().__init__('pregrasp')
-        self.declare_parameter('tag_topic', 'tea_tag/position')
+        # use the sim's /clock by default: the MuJoCo sim often runs far below real time,
+        # so wall-clock timeouts fire long before the robot has moved
+        super().__init__('pregrasp', parameter_overrides=[Parameter('use_sim_time', value=True)])
+        # YOLO-World tag detection (yolo_world_localizer), base_link frame
+        self.declare_parameter('tag_topic', 'tea_bag/position')
         self.declare_parameter('base_frame', 'base_link')
         self.declare_parameter('fixed_frame', 'odom')
         self.declare_parameter('grasp_frame', 'link_grasp_center')
@@ -68,7 +73,7 @@ class Pregrasp(Node):
         self.declare_parameter('samples', 10)
         self.declare_parameter('arm_axis', [0.0, -1.0, 0.0])
         self.declare_parameter('execute', True)
-        self.declare_parameter('base_speed', 0.08)  # m/s
+        self.declare_parameter('base_speed', 0.3)   # m/s top speed (tapers near the goal)
 
         g = lambda n: self.get_parameter(n).value  # noqa: E731
         self.base_frame, self.fixed = g('base_frame'), g('fixed_frame')
@@ -160,27 +165,32 @@ class Pregrasp(Node):
             f"driver /mode is '{self.mode}', not 'navigation'. If several "
             'stretch_mujoco_driver processes are running, kill the stale ones.')
 
+    def now_s(self):
+        """ROS time in s (sim time when run with -p use_sim_time:=true)."""
+        return self.get_clock().now().nanoseconds * 1e-9
+
     def drive(self, dx):
         if abs(dx) < 0.005:
             return
         start, R = self.pose_in_fixed()
         fwd = R[:2, 0]
         sign = 1.0 if dx > 0 else -1.0
-        tw = Twist()
-        tw.linear.x = sign * self.speed
         self.get_logger().info(f'Driving {dx:+.3f} m along base x')
-        t0 = time.time()
-        while time.time() - t0 < abs(dx) / self.speed + 10.0:
+        t0 = self.now_s()
+        while self.now_s() - t0 < abs(dx) / self.speed + 10.0:
             pos, _ = self.pose_in_fixed()
             travelled = float((pos - start) @ fwd)
             if (dx - travelled) * sign <= 0.003:
                 break
-            if time.time() - t0 > 3.0 and abs(travelled) < 0.01:
+            if self.now_s() - t0 > 3.0 and abs(travelled) < 0.01:
                 self.cmd_pub.publish(Twist())
                 raise RuntimeError(
                     f'base did not move (odom travelled {travelled:.3f} m after 3 s, '
                     f"driver mode '{self.mode}'). Check the sim terminal for "
                     'cmd_vel / mode errors and for duplicate driver processes.')
+            # full speed, tapering (proportional to remaining distance) near the goal
+            tw = Twist()
+            tw.linear.x = sign * min(self.speed, max(0.03, 1.5 * abs(dx - travelled)))
             self.cmd_pub.publish(tw)
             time.sleep(0.05)
         self.cmd_pub.publish(Twist())
