@@ -29,7 +29,7 @@ ros2 run robot_tea_brewer pregrasp
 stretch_robot_home.py
 source /opt/ros/humble/setup.bash
 source install/setup.bash
-ros2 launch stretch_core stretch_driver.launch.py
+ros2 launch stretch_core stretch_driver.launch.py broadcast_odom_tf:=True
 Ros2 launch stretch_core stretch_real_sense.launch.py
 ros2 launch stretch
 rviz2 (see the camera images being published)

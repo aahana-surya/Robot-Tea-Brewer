@@ -10,6 +10,7 @@ yolo_world_localizer, base_link frame), then:
 DRY RUN by default: prints the plan and does not move. Pass `-p execute:=true`.
 Needs the base in navigation mode (the node calls /switch_to_navigation_mode).
 """
+import sys
 import threading
 import time
 
@@ -61,8 +62,12 @@ def plan_pregrasp(tag_b, grasp_b, lift, ext, hover, arm_axis):
 class Pregrasp(Node):
     def __init__(self):
         # use the sim's /clock by default: the MuJoCo sim often runs far below real time,
-        # so wall-clock timeouts fire long before the robot has moved
-        super().__init__('pregrasp', parameter_overrides=[Parameter('use_sim_time', value=True)])
+        # so wall-clock timeouts fire long before the robot has moved.
+        # On the real robot (no /clock) pass `-p use_sim_time:=false`, otherwise ROS time
+        # stays at 0 and the drive timeouts / stall check never fire.
+        cli_sets_sim_time = any('use_sim_time' in a for a in sys.argv)
+        super().__init__('pregrasp', parameter_overrides=(
+            [] if cli_sets_sim_time else [Parameter('use_sim_time', value=True)]))
         # YOLO-World tag detection (yolo_world_localizer), base_link frame
         self.declare_parameter('tag_topic', 'tea_bag/position')
         self.declare_parameter('base_frame', 'base_link')
@@ -108,7 +113,10 @@ class Pregrasp(Node):
             tf = self.tf_buffer.lookup_transform(
                 self.fixed, msg.header.frame_id, Time(), RclDuration(seconds=0.5))
         except Exception as e:
-            self.get_logger().warn(f'TF failed: {e}', throttle_duration_sec=2.0)
+            hint = ''
+            if self.fixed == 'odom' and 'does not exist' in str(e):
+                hint = (' (real robot: launch stretch_driver with broadcast_odom_tf:=True)')
+            self.get_logger().warn(f'TF failed: {e}{hint}', throttle_duration_sec=2.0)
             return
         t, q = tf.transform.translation, tf.transform.rotation
         p = quat_to_matrix(q.x, q.y, q.z, q.w) @ [msg.point.x, msg.point.y, msg.point.z]
