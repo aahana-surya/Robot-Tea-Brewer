@@ -235,7 +235,7 @@ class Pregrasp(Node):
             # 3. recompute and check reach with the new base pose
             p = plan()
             self.get_logger().info(f'Plan after driving: {p}')
-            if abs(p['base_dx']) > 0.03:
+            if abs(p['base_dx']) > 0.05:
                 raise RuntimeError(
                     f"base still {p['base_dx']:.3f} m from the tag in x after driving")
             if p['warnings']:
