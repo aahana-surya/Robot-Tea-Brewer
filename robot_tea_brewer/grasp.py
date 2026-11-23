@@ -15,8 +15,7 @@ so the fingers close along base y, ACROSS the handle:
      (if the fingertips touch the table first, closes from there),
   4. closes the gripper (it stalls on the handle), 5. lifts by `lift_height`,
   6. (carry_wrist, default on) straightens the wrist (`carry_pitch`, 0 = level) and
-     rolls it `carry_roll_delta` (+90 deg) from the roll it had when the grasp
-     started (i.e. after pregrasp), ready for `steep_tea`, which keeps the wrist
+     rolls it `carry_roll_delta` (-270 deg, i.e. the +90 pose the long way round) from the pregrasp roll, ready for `steep_tea`, which keeps the wrist
      as it finds it.
 
 approach:=side - gripper level, for an upright block: sets the lift to grasp
@@ -73,10 +72,11 @@ class Grasp(Node):
         d('max_push', 0.02)          # m, max extra lift-down correction beyond the plan
         d('gripper_open', 0.4)       # joint_gripper_finger_left (rad-ish units)
         d('gripper_close', -0.2)     # past contact -> squeezes the block
+        d('miss_margin', 0.01)       # closed within this of gripper_close = missed the block
         d('lift_height', 0.10)       # m to raise the block after grasping
         d('carry_wrist', True)       # after lifting, re-orient the wrist for steeping
         d('carry_pitch', 0.0)        # rad, level wrist
-        d('carry_roll_delta', 1.57)  # rad, roll relative to the roll after pregrasp
+        d('carry_roll_delta', -4.71) # rad, roll relative to the roll after pregrasp (-270 deg = same pose as +90, other way round)
         d('approach_secs', 4.0)
         d('z_tol', 0.01)             # m, max grasp-centre height error before closing
 
@@ -210,7 +210,7 @@ class Grasp(Node):
             # 5. lift
             self.m.move_joints(['joint_lift'],
                              [min(lift_cmd + g('lift_height'), LIFT_RANGE[1])])
-            if closed is not None and closed <= g('gripper_close') + 0.05:
+            if closed is not None and closed <= g('gripper_close') + g('miss_margin'):
                 self.get_logger().warn(
                     f'Gripper closed fully ({closed:.3f}) - it probably missed the block.')
                 return
@@ -220,7 +220,13 @@ class Grasp(Node):
                 self.get_logger().info(
                     f'Carry wrist: pitch {g("carry_pitch"):.2f}, roll {roll:.2f} '
                     f'({g("carry_roll_delta"):+.2f} from {roll0:.2f})')
-                self.m.set_wrist(g('carry_pitch'), g('wrist_yaw'), roll)
+                # separate moves: a rejected/clipped roll must not block the pitch
+                self.m.set_wrist(g('carry_pitch'), g('wrist_yaw'))    # rotate up
+                self.m.move_joints(['joint_wrist_roll'], [roll])      # rotate horizontal
+                self.get_logger().info(
+                    'Carry wrist reached: pitch '
+                    f'{self.m.joints["joint_wrist_pitch"]:.2f}, '
+                    f'roll {self.m.joints["joint_wrist_roll"]:.2f}')
             self.get_logger().info(f'DONE. Block grasped and lifted (gripper {closed}).')
         except Exception as e:
             self.get_logger().error(f'Grasp aborted: {e}')

@@ -84,11 +84,11 @@ Start the driver and both cameras first (see "Get the physical robot to run" abo
 
 Terminal 1 (yolo world, head camera):
 ```bash
-ros2 run robot_tea_brewer yolo_world_localizer --ros-args -p platform:=robot
+ros2 run robot_tea_brewer yolo_world_localizer --ros-args -p platform:=robot -p show:=true
 ```
 Terminal 2 (yolo world, gripper camera):
 ```bash
-ros2 run robot_tea_brewer yolo_world_localizer --ros-args -r __ns:=/gripper -p camera:=gripper -p platform:=robot
+ros2 run robot_tea_brewer yolo_world_localizer --ros-args -r __ns:=/gripper -p camera:=gripper -p platform:=robot -p show:=true
 ```
 Terminal 3 (head scan, optional):
 ```bash
@@ -161,8 +161,8 @@ ros2 run robot_tea_brewer yolo_world_localizer --ros-args -r __ns:=/gripper -p c
 If the gripper camera sees nothing within `refine_timeout`, or its position differs from
 the head estimate by more than `max_correction` (0.08 m), the head position is kept.
 Disable with `-p refine:=false`.
-The wrist orientation is no longer set here: `grasp` straightens it and rolls it +90 deg from the
-pregrasp roll after lifting the bag (`-p carry_wrist:=false` to skip, `carry_pitch`,
+The wrist orientation is no longer set here: `grasp` straightens it and rolls it `carry_roll_delta` (-270 deg, the same pose as +90 reached the other way round)
+from the pregrasp roll after lifting the bag (`-p carry_wrist:=false` to skip, `carry_pitch`,
 `carry_roll_delta` to change), and `steep_tea` keeps it as it finds it.
 
 ### Code layout
