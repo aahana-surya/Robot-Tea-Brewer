@@ -1,4 +1,8 @@
-"""ROS 2 node: sweep the Stretch head pan/tilt until the tag localizer sees the tag."""
+"""ROS 2 node: sweep the Stretch head pan/tilt until the localizer sees the target.
+
+Default target: the orange block published by yolo_world_localizer on
+`orange_block/position`. Override with `-p target_topic:=<topic>`.
+"""
 import rclpy
 from control_msgs.action import FollowJointTrajectory
 from geometry_msgs.msg import PointStamped
@@ -11,6 +15,7 @@ from trajectory_msgs.msg import JointTrajectoryPoint
 class HeadScan(Node):
     def __init__(self):
         super().__init__('head_scan')
+        self.declare_parameter('target_topic', 'orange_block/position')
         self.declare_parameter('action_name', '/stretch_controller/follow_joint_trajectory')
         self.declare_parameter('pan_center', -1.1)  # rad; 0 = straight ahead, negative = right (table side)
         self.declare_parameter('pan_range', 0.5)    # sweep +/- this much
@@ -30,7 +35,7 @@ class HeadScan(Node):
         self.found = False
         self.i = 0
         self.client = ActionClient(self, FollowJointTrajectory, p('action_name').value)
-        self.create_subscription(PointStamped, 'tea_tag/position', self.on_found, 10)
+        self.create_subscription(PointStamped, p('target_topic').value, self.on_found, 10)
         self.timer = None
         self.get_logger().info('Waiting for trajectory action server...')
         self.client.wait_for_server()
@@ -39,13 +44,13 @@ class HeadScan(Node):
     def on_found(self, _msg):
         if not self.found:
             self.found = True
-            self.get_logger().info('Tag localized - stopping scan.')
+            self.get_logger().info('Target localized - stopping scan.')
 
     def next_waypoint(self):
         if self.found:
             return
         if self.i >= len(self.waypoints):
-            self.get_logger().warn('Scan finished, tag not found.')
+            self.get_logger().warn('Scan finished, target not found.')
             return
         pan, tilt = self.waypoints[self.i]
         self.i += 1
