@@ -9,7 +9,15 @@ yolo_world_localizer, base_link frame; override with `-p tag_topic:=...`), then
   2. drives the base forward/back so the gripper is level with the target in x,
   3. moves the lift to the pregrasp height (arm still retracted),
   4. extends the arm until the gripper is `standoff` short of the object (side)
-     or `hover` above it (top).
+     or `hover` above it (top),
+  5. (refine, default on) re-measures the object with the GRIPPER camera, which is
+     now close to it and sees it much larger than the head camera did, then
+     repeats 2-4 with that position. Needs a second localizer instance:
+       ros2 run robot_tea_brewer yolo_world_localizer --ros-args \
+           -r __ns:=/gripper -p camera:=gripper
+     If the gripper camera reports nothing within `refine_timeout`, or a position
+     more than `max_correction` from the head estimate (probably a wrong
+     detection), the head-camera position is kept.
 
 When done it publishes the target (fixed frame, latched) on `pregrasp/target`;
 the `grasp` node waits for that message before picking the object up.
@@ -44,6 +52,11 @@ class Pregrasp(Node):
         d('side_z', 0.02)        # m above the detected centre (side)
         d('samples', 10)
         d('execute', True)
+        d('refine', True)                       # re-measure with the gripper camera
+        d('refine_topic', 'gripper/orange_block/position')
+        d('refine_samples', 5)
+        d('refine_timeout', 30.0)               # s (wall) to wait for the gripper samples
+        d('max_correction', 0.08)               # m, larger -> distrust the gripper camera
         g = lambda n: self.get_parameter(n).value  # noqa: E731
         self.execute, self.approach = g('execute'), g('approach')
         arm_axis = np.asarray(g('arm_axis'), float)
@@ -58,10 +71,38 @@ class Pregrasp(Node):
 
         self.motion = StretchMotion(self)
         self.target_pub = self.create_publisher(PointStamped, 'pregrasp/target', LATCHED)
+        self.refine = g('refine')
+        self.refine_timeout, self.max_corr = g('refine_timeout'), g('max_correction')
+        self.refiner = (TargetSampler(self, self.motion, g('refine_topic'), g('refine_samples'))
+                        if self.refine else None)
         self.sampler = TargetSampler(self, self.motion, g('tag_topic'), g('samples'), self.run)
         self.get_logger().info(
             f'Collecting {g("samples")} target samples '
             f'({"EXECUTE" if self.execute else "DRY RUN"})...')
+
+    def refine_target(self, head_fixed, err):
+        """Re-measure with the gripper camera and move again; returns (target, err)."""
+        m = self.motion
+        self.get_logger().info(
+            f'Refining with the gripper camera ({self.refiner.topic}, '
+            f'{self.refiner.n} samples)...')
+        new = self.refiner.collect(timeout=self.refine_timeout)
+        if new is None:
+            self.get_logger().warn(
+                'No gripper-camera position (is the /gripper localizer running and does '
+                'it see the object?) - keeping the head-camera position.')
+            return head_fixed, err
+        corr = new - head_fixed
+        self.get_logger().info(
+            f'Gripper camera: {np.round(new, 3)} in {m.fixed}, correction '
+            f'{np.round(corr, 3)} ({np.linalg.norm(corr) * 100:.1f} cm)')
+        if np.linalg.norm(corr) > self.max_corr:
+            self.get_logger().warn(
+                f'Correction larger than max_correction={self.max_corr} m - probably a '
+                'wrong detection; keeping the head-camera position.')
+            return head_fixed, err
+        err = m.go_to(new, self.offset, wrist=self.wrist)
+        return new, err
 
     def run(self, tag_fixed):
         m = self.motion
@@ -77,6 +118,8 @@ class Pregrasp(Node):
             # run may have left it extended over the table)
             err = m.go_to(tag_fixed, self.offset, wrist=self.wrist,
                           retract_first=(self.approach == 'side'))
+            if self.refine:
+                tag_fixed, err = self.refine_target(tag_fixed, err)
             self.get_logger().info(
                 f'DONE ({self.approach}). Gripper-to-pregrasp error in base_link (m): '
                 f'{np.round(err, 3)}')

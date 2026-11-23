@@ -20,8 +20,16 @@ Also publishes annotated images on `yolo_world/annotated_image`.
 
 Camera: `-p camera:=head` (default, D435i, mounted sideways) or `-p camera:=gripper`
 (D405 on the wrist; the block is far bigger in this view once the arm is near it).
-The preset only sets the defaults of color_topic / depth_topic / info_topic / rotate;
+Platform: `-p platform:=sim` (default, stretch_mujoco topics) or `-p platform:=robot`
+(realsense-ros topics, with depth ALIGNED to the color image - the raw depth
+image has a different field of view, so colour pixels don't line up with it).
+The presets only set the defaults of color_topic / depth_topic / info_topic / rotate;
 any of those can still be overridden individually.
+
+To run the head and gripper cameras at once (pregrasp refines with the gripper one),
+start a second instance in its own namespace:
+  ros2 run robot_tea_brewer yolo_world_localizer --ros-args -r __ns:=/gripper \
+      -p camera:=gripper              # -> /gripper/orange_block/position
 """
 import cv2
 import numpy as np
@@ -39,12 +47,19 @@ from ultralytics import YOLOWorld
 
 from robot_tea_brewer.tag_localizer import deproject, depth_at, quat_to_matrix
 
-# camera preset -> (color_topic, depth_topic, info_topic, rotate)
+# (platform, camera) preset -> (color_topic, depth_topic, info_topic, rotate)
+# head camera is mounted sideways (rotate 90)
 CAMERAS = {
-    'head': ('/camera/color/image_raw', '/camera/depth/image_rect_raw',
-             '/camera/depth/camera_info', 90),          # head camera is mounted sideways
-    'gripper': ('/gripper_camera/image_raw', '/gripper_camera/depth/image_rect_raw',
-                '/gripper_camera/depth/camera_info', 0),
+    ('sim', 'head'): ('/camera/color/image_raw', '/camera/depth/image_rect_raw',
+                      '/camera/depth/camera_info', 90),
+    ('sim', 'gripper'): ('/gripper_camera/image_raw', '/gripper_camera/depth/image_rect_raw',
+                         '/gripper_camera/depth/camera_info', 0),
+    # realsense-ros (stretch_core d435i_*/d405_basic launch, align_depth enabled)
+    ('robot', 'head'): ('/camera/color/image_raw', '/camera/aligned_depth_to_color/image_raw',
+                        '/camera/aligned_depth_to_color/camera_info', 90),
+    ('robot', 'gripper'): ('/gripper_camera/color/image_rect_raw',
+                           '/gripper_camera/aligned_depth_to_color/image_raw',
+                           '/gripper_camera/aligned_depth_to_color/camera_info', 0),
 }
 
 ROTATIONS = {0: None, 90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180,
@@ -67,9 +82,11 @@ class YoloWorldLocalizer(Node):
         super().__init__('yolo_world_localizer')
         d = self.declare_parameter
         cam = d('camera', 'head').value
-        if cam not in CAMERAS:
-            raise ValueError(f"camera must be one of {list(CAMERAS)}, got {cam!r}")
-        color_t, depth_t, info_t, rot = CAMERAS[cam]
+        platform = d('platform', 'sim').value
+        if (platform, cam) not in CAMERAS:
+            raise ValueError(f"(platform, camera) must be one of {list(CAMERAS)}, "
+                             f"got {(platform, cam)!r}")
+        color_t, depth_t, info_t, rot = CAMERAS[(platform, cam)]
         d('color_topic', color_t)
         d('depth_topic', depth_t)
         d('info_topic', info_t)
@@ -141,7 +158,8 @@ class YoloWorldLocalizer(Node):
         self.pub = {k: self.create_publisher(PointStamped, f'{n}/position', 10)
                     for k, n in (('block', 'orange_block'), ('cup', 'cup'))}
         self.pub_img = self.create_publisher(Image, 'yolo_world/annotated_image', 1)
-        self.get_logger().info(f'Camera {cam!r} ({g("color_topic")}, rotate {self.rotate}); '
+        self.get_logger().info(f'Camera {cam!r} on {platform} ({g("color_topic")}, '
+                               f'depth {g("depth_topic")}, rotate {self.rotate}); '
                                f'YOLO-World prompts: {self.classes}')
 
     def on_info(self, msg):
@@ -199,6 +217,22 @@ class YoloWorldLocalizer(Node):
         z = z[np.isfinite(z) & (z > 0.05)]
         return float(np.median(z)) if z.size else None
 
+    def box_depth(self, box_rot, frame_wh, frac=0.6):
+        """Median valid depth [m] over the central `frac` of a rotated-frame box, or None."""
+        w, h = frame_wh
+        x1, y1, x2, y2 = box_rot
+        cx, cy, hw, hh = (x1 + x2) / 2, (y1 + y2) / 2, (x2 - x1) * frac / 2, (y2 - y1) * frac / 2
+        gx, gy = np.meshgrid(np.linspace(cx - hw, cx + hw, 15), np.linspace(cy - hh, cy + hh, 15))
+        u, v = rotated_to_original(gx.ravel(), gy.ravel(), self.rotate, w, h)
+        dh, dw = self.depth.shape[:2]
+        du = np.clip(np.round(np.asarray(u) * dw / w).astype(int), 0, dw - 1)
+        dv = np.clip(np.round(np.asarray(v) * dh / h).astype(int), 0, dh - 1)
+        z = self.depth[dv, du].astype(np.float64)
+        if self.depth.dtype == np.uint16:      # millimetres
+            z = z / 1000.0
+        z = z[np.isfinite(z) & (z > 0.05)]
+        return float(np.median(z)) if z.size else None
+
     def locate(self, box_rot, frame_wh, extra_depth=0.0, uv_rot=None, horizontal=False,
                z_cam=None):
         """Rotated-frame bbox (or pixel uv_rot) -> 3D point in target_frame (or None).
@@ -216,6 +250,10 @@ class YoloWorldLocalizer(Node):
         dh, dw = self.depth.shape[:2]
         du, dv = u * dw / w, v * dh / h
         z = z_cam if z_cam is not None else depth_at(self.depth, du, dv, half=3)
+        if z is None and z_cam is None:
+            # the centre pixel can fall on a depth hole (e.g. the dark cup opening, or
+            # too close for the sensor): use the median over the box's central area
+            z = self.box_depth(box_rot, frame_wh)
         if z is None:
             return None
         if not horizontal:

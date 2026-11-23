@@ -363,30 +363,63 @@ class StretchMotion:
         self.log.info(f'Gripper-to-goal error in base_link (m): {np.round(err, 3)}')
         return err
 
-    def go_above(self, target_fixed, hover, raise_before_drive=False):
-        """Wrist down, grasp center `hover` m straight above `target_fixed`."""
-        return self.go_to(target_fixed, hover, raise_before_drive=raise_before_drive)
+    def go_above(self, target_fixed, hover, raise_before_drive=False,
+                 wrist=(WRIST_DOWN, 0.0, None)):
+        """Grasp center `hover` m straight above `target_fixed` (wrist down by default)."""
+        return self.go_to(target_fixed, hover, wrist=wrist,
+                          raise_before_drive=raise_before_drive)
 
 
 class TargetSampler:
-    """Collect `n` samples of a PointStamped topic, then call `on_ready(median)`.
+    """Collect `n` samples of a PointStamped topic and take their median.
 
     Samples are transformed into `motion.fixed` so they stay valid while the
-    base moves. `on_ready` runs on a new thread (it may block). Call `reset()`
-    to collect a fresh set, e.g. after the scene changed.
+    base moves.
+
+    Callback mode (`on_ready` given): starts collecting immediately and calls
+    `on_ready(median)` on a new thread (it may block). Call `reset()` to collect
+    a fresh set, e.g. after the scene changed.
+
+    Blocking mode (`on_ready=None`): idle until `collect()` is called from a
+    worker thread, which returns the median of the next `n` samples (or None on
+    timeout).
     """
 
-    def __init__(self, node, motion, topic, n, on_ready):
+    def __init__(self, node, motion, topic, n, on_ready=None):
         self.node, self.motion, self.n, self.on_ready = node, motion, n, on_ready
+        self.topic = topic
         self.samples = []
-        self.started = False
+        self.started = on_ready is None    # blocking mode: ignore messages until collect()
+        self.skip = 0
+        self.done = threading.Event()
         node.create_subscription(PointStamped, topic, self._on_point, 10)
 
     def reset(self):
         self.samples, self.started = [], False
 
+    def collect(self, timeout=30.0, skip=1):
+        """Blocking: median of the next `n` samples, or None after `timeout` s (wall).
+
+        `skip` drops the first messages received: a detection already being
+        computed when collect() is called may come from an image taken while the
+        robot was still moving.
+        """
+        self.done.clear()
+        self.skip = skip
+        self.reset()
+        if not self.done.wait(timeout):
+            self.started = True
+            got = len(self.samples)
+            self.node.get_logger().warn(
+                f'{self.topic}: only {got}/{self.n} samples after {timeout:.0f} s')
+            return None
+        return self.median
+
     def _on_point(self, msg):
         if self.started:
+            return
+        if self.skip > 0:
+            self.skip -= 1
             return
         try:
             t, R = self.motion._tf(self.motion.fixed, msg.header.frame_id, timeout=0.5)
@@ -399,6 +432,7 @@ class TargetSampler:
         self.samples.append(R @ [msg.point.x, msg.point.y, msg.point.z] + t)
         if len(self.samples) >= self.n:
             self.started = True
-            threading.Thread(
-                target=self.on_ready, args=(np.median(np.array(self.samples), axis=0),),
-                daemon=True).start()
+            self.median = np.median(np.array(self.samples), axis=0)
+            self.done.set()
+            if self.on_ready is not None:
+                threading.Thread(target=self.on_ready, args=(self.median,), daemon=True).start()
