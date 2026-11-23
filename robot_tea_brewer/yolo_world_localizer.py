@@ -5,9 +5,10 @@ training). The best box per target is turned into a 3D point with the depth
 image + camera intrinsics, then transformed with TF into `target_frame`.
 
 Targets
-  tea bag : we detect its paper tag (the part the robot grips; the open-vocab
-            model recognises "paper tag" far more reliably than "tea bag" on
-            the sim render). Published on `tea_bag/position`.
+  tea bag : we detect the orange 3D-printed handle attached to the tea bag
+            string (the part the robot grips; detecting the handle is more
+            reliable than detecting the tea bag itself). Published on
+            `tea_bag/position`.
   cup     : published on `cup/position` (centre of the cup axis at the rim).
 
 Also publishes annotated images on `yolo_world/annotated_image`.
@@ -56,7 +57,7 @@ class YoloWorldLocalizer(Node):
         d('rotate', 90)                       # head camera is mounted sideways
         d('period', 2.0)                      # s between inferences (CPU friendly)
         d('threads', 2)                       # torch CPU threads; keep few so the sim isn't starved
-        d('bag_prompt', 'green paper tea bag tag')
+        d('bag_prompt', 'orange plastic handle')
         d('bag_conf', 0.04)
         d('cup_prompt', 'paper cup')
         d('cup_conf', 0.25)
@@ -64,12 +65,14 @@ class YoloWorldLocalizer(Node):
         d('cup_half_height', 0.05)            # m, to get the rim from the box centre
         d('distractors', ['table', 'robot', 'wall'])
         d('show', False)
+        d('color_encoding', 'bgr8')           # 'bgr8' (sim) or 'passthrough' (use camera's raw encoding)
         g = lambda n: self.get_parameter(n).value  # noqa: E731
         self.target = g('target_frame')
         self.rotate = g('rotate')
         self.cv_rot = ROTATIONS[self.rotate]
         torch.set_num_threads(int(g('threads')))
         self.period, self.show = g('period'), g('show')
+        self.color_enc = g('color_encoding')
         self.cfg = {'bag': (g('bag_prompt'), g('bag_conf')),
                     'cup': (g('cup_prompt'), g('cup_conf'))}
         self.cup_r, self.cup_hh = g('cup_radius'), g('cup_half_height')
@@ -127,8 +130,8 @@ class YoloWorldLocalizer(Node):
                                    throttle_duration_sec=3.0)
             return
         self.last_t = now
-        # frame = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
-        frame = self.bridge.imgmsg_to_cv2(msg)
+        frame = self.bridge.imgmsg_to_cv2(msg, self.color_enc)
+        out_enc = msg.encoding if self.color_enc == 'passthrough' else self.color_enc
         h, w = frame.shape[:2]
         img = cv2.rotate(frame, self.cv_rot) if self.cv_rot is not None else frame
         res = self.model.predict(img, conf=min(c for _, c in self.cfg.values()),
@@ -166,8 +169,7 @@ class YoloWorldLocalizer(Node):
                 f'{prompt!r} conf={float(b.conf):.2f} @ {self.target}: '
                 f'{p[0]:.3f} {p[1]:.3f} {p[2]:.3f}', throttle_duration_sec=1.0)
         # explicit encoding so rqt_image_view can display it (plain 8UC3 isn't a color format)
-        # self.pub_img.publish(self.bridge.cv2_to_imgmsg(annotated, encoding='bgr8', header=msg.header))
-        self.pub_img.publish(self.bridge.cv2_to_imgmsg(annotated, header=msg.header))
+        self.pub_img.publish(self.bridge.cv2_to_imgmsg(annotated, encoding=out_enc, header=msg.header))
         if self.show:
             cv2.imshow('yolo_world_localizer', annotated)
             cv2.waitKey(1)

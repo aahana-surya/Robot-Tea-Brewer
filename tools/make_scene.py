@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Generate the tea-bag scene for stretch_mujoco.
 
-Writes tea_bag.png / tea_tag.png / paper_cup.png into <models>/assets and
+Writes tea_bag.png / paper_cup.png into <models>/assets and
 rewrites <models>/scene.xml with:
   * a pillow-shaped tea bag (stitched border, leaf shadow) with a cotton string
-    and a printed paper tag, all on ONE rigid body (lift the tag -> bag follows)
+    tied to a 3D-printed orange handle (the part the robot grips), all on ONE
+    rigid body (lift the handle -> bag follows)
   * a hollow white paper cup with a cardboard sleeve (open top, bag can drop in)
 
 Usage:  python3 tools/make_scene.py [models_dir]
@@ -20,13 +21,33 @@ DEFAULT_MODELS = Path.home() / 'repos/stretch_mujoco/stretch_mujoco/models'
 
 # ---- geometry (metres) ----
 BAG_HALF = (0.04, 0.03, 0.006)          # bag half sizes x, y, z
-TAG_HALF = (0.032, 0.022, 0.0015)       # paper tag
-# string lies flat with a gentle S-bend (slack), pinned to bag AND tag
-STRING_PTS = [(0.040, 0, 0.005), (0.058, 0.006, 0.003), (0.076, -0.006, 0.003),
-              (0.094, 0.005, 0.003), (0.110, 0, 0.003)]
-TAG_CENTER = (0.110 + TAG_HALF[0], 0, TAG_HALF[2])
+# Orange 3D-printed handle, lying flat, long axis along +x (string ties to the
+# knob at its -x end). Profile in mm along x (half-width in y), from the CAD:
+#   knob 0-3 | stem 3-8 | collar 8-11 | base flange 11-16 (hw 9) | flare 16-20
+#   | neck 20-36 (hw 4) | flare 36-40 | top plate 40-45 (hw 10)
+# HANDLE_SCALE scales the whole thing (1.0 = 45 mm long; ~80 mm ~ bag length).
+HANDLE_SCALE = 1.75
+HANDLE_X0 = 0.110                       # string end / knob start (m)
+HANDLE_HZ = 0.004 * HANDLE_SCALE        # half thickness (z) of the plate parts
+HANDLE_Z = HANDLE_HZ - BAG_HALF[2]      # centre height: bottom level with the bag's
+HANDLE_RGBA = '1 .42 .05 1'
 
-BAG_ROT, TAG_ROT = 3, 2   # np.rot90 turns so photo features land on the right box ends
+
+def hx(mm):
+    """Handle x position (mm along the CAD profile) -> metres in the bag frame."""
+    return HANDLE_X0 + mm * 1e-3 * HANDLE_SCALE
+
+
+def hw(mm):
+    """Handle half-width / radius in metres."""
+    return mm * 1e-3 * HANDLE_SCALE
+
+
+# string lies flat with a gentle S-bend (slack), pinned to bag AND handle knob
+STRING_PTS = [(0.040, 0, 0.005), (0.058, 0.006, 0.003), (0.076, -0.006, 0.003),
+              (0.094, 0.005, 0.002), (hx(1.5), 0, HANDLE_Z)]
+
+BAG_ROT = 3   # np.rot90 turns so photo features land on the right box end
 CUP_R, CUP_HALF_H, CUP_WALL, CUP_SIDES = 0.045, 0.05, 0.0015, 20
 
 
@@ -74,27 +95,6 @@ def tea_bag_texture(w=320, h=240):
     return img
 
 
-def tea_tag_texture(w=256, h=176):
-    """Printed paper tea tag: burgundy header, leaf illustration, text, eyelet hole."""
-    img = np.full((h, w, 3), (232, 242, 248), np.uint8)
-    cv2.rectangle(img, (0, 0), (w, 54), (60, 40, 120), -1)             # burgundy header
-    cv2.putText(img, 'ROYAL', (62, 24), cv2.FONT_HERSHEY_DUPLEX, 0.7, (235, 245, 250), 1, cv2.LINE_AA)
-    cv2.putText(img, 'TEA CO.', (62, 46), cv2.FONT_HERSHEY_DUPLEX, 0.7, (235, 245, 250), 1, cv2.LINE_AA)
-    cv2.circle(img, (30, 27), 12, (225, 235, 240), -1)                  # eyelet
-    cv2.circle(img, (30, 27), 12, (130, 130, 130), 2)
-    cv2.circle(img, (30, 27), 6, (60, 40, 120), -1)
-    # leaf illustration
-    cv2.ellipse(img, (w // 2 - 40, 112), (46, 24), -30, 0, 360, (70, 140, 60), -1)
-    cv2.line(img, (w // 2 - 78, 130), (w // 2 - 4, 92), (40, 90, 35), 2)
-    for k in range(-2, 3):
-        cv2.line(img, (w // 2 - 41 + 9 * k, 111 - 5 * k), (w // 2 - 41 + 9 * k + 10, 100 - 5 * k), (40, 90, 35), 1)
-    cv2.putText(img, 'English', (w // 2 + 14, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (60, 40, 120), 2, cv2.LINE_AA)
-    cv2.putText(img, 'Breakfast', (w // 2 + 4, 126), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (60, 40, 120), 2, cv2.LINE_AA)
-    cv2.putText(img, 'BLACK TEA', (w // 2 + 8, 152), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (90, 90, 90), 1, cv2.LINE_AA)
-    cv2.rectangle(img, (0, 0), (w - 1, h - 1), (170, 180, 185), 2)
-    return img
-
-
 def paper_cup_texture(w=256, h=128):
     img = np.full((h, w, 3), (250, 250, 250), np.uint8)
     cv2.rectangle(img, (0, 0), (w, 22), (200, 200, 200), -1)
@@ -103,6 +103,45 @@ def paper_cup_texture(w=256, h=128):
 
 def fmt(v):
     return ' '.join(f'{x:.5g}' for x in v)
+
+
+def _flare(x0, hy0, x1, hy1):
+    """Convex-hull mesh vertices for a trapezoid (half-width hy0 -> hy1 along x)."""
+    z = HANDLE_Z
+    return ' '.join(fmt(v) for v in [
+        (x0, -hy0, z - HANDLE_HZ), (x0, hy0, z - HANDLE_HZ), (x0, -hy0, z + HANDLE_HZ),
+        (x0, hy0, z + HANDLE_HZ), (x1, -hy1, z - HANDLE_HZ), (x1, hy1, z - HANDLE_HZ),
+        (x1, -hy1, z + HANDLE_HZ), (x1, hy1, z + HANDLE_HZ)])
+
+
+def handle_assets():
+    return (f'<mesh name="handle_flare_lo" vertex="{_flare(hx(16), hw(9), hx(20), hw(4))}"/>\n    '
+            f'<mesh name="handle_flare_hi" vertex="{_flare(hx(36), hw(4), hx(40), hw(10))}"/>')
+
+
+def handle_xml():
+    """Orange handle: knob + stem + collar + base flange + neck + top plate."""
+    z, hz, rgba = HANDLE_Z, HANDLE_HZ, HANDLE_RGBA
+    common = f'friction="1.2 .1 .1" rgba="{rgba}"'
+
+    def box(name, x0, x1, hy):
+        return (f'<geom name="{name}" type="box" size="{(x1 - x0) / 2:.5f} {hy} {hz}" '
+                f'pos="{(x0 + x1) / 2:.5f} 0 {z}" mass="{0.0015 * HANDLE_SCALE ** 3:.5f}" {common}/>')
+
+    def cyl(name, x0, x1, r):
+        return (f'<geom name="{name}" type="cylinder" size="{r} {(x1 - x0) / 2:.5f}" '
+                f'pos="{(x0 + x1) / 2:.5f} 0 {z}" euler="0 90 0" mass="{0.0003 * HANDLE_SCALE ** 3:.5f}" {common}/>')
+
+    return '\n      '.join([
+        cyl('handle_knob', hx(0), hx(3), hw(3.2)),
+        cyl('handle_stem', hx(3), hx(8), hw(1.8)),
+        cyl('handle_collar', hx(8), hx(11), hw(4.5)),
+        box('handle_base', hx(11), hx(16), hw(9)),
+        f'<geom name="handle_flare_lo" type="mesh" mesh="handle_flare_lo" mass="{0.0012 * HANDLE_SCALE ** 3:.5f}" {common}/>',
+        box('handle_neck', hx(20), hx(36), hw(4)),
+        f'<geom name="handle_flare_hi" type="mesh" mesh="handle_flare_hi" mass="{0.0012 * HANDLE_SCALE ** 3:.5f}" {common}/>',
+        box('handle_top', hx(40), hx(45), hw(10)),
+    ])
 
 
 def cup_xml():
@@ -154,10 +193,9 @@ def scene_xml():
     <texture type="skybox" builtin="gradient" rgb1="0.44 0.80 1.00" rgb2="1 1 1" width="512" height="3072"/>
     <texture type="2d" name="tea_bag" file="tea_bag.png"/>
     <material name="tea_bag" texture="tea_bag" rgba=".72 .72 .72 1"/>
-    <texture type="2d" name="tea_tag" file="tea_tag.png"/>
-    <material name="tea_tag" texture="tea_tag" rgba=".85 .85 .85 1"/>
     <texture type="2d" name="paper_cup" file="paper_cup.png"/>
     <material name="paper_cup" texture="paper_cup" rgba="1 1 1 1"/>
+    {handle_assets()}
   </asset>
 
   <worldbody>
@@ -167,14 +205,14 @@ def scene_xml():
       <geom type="box" size=".6 .5 .24" mass="1" material="wood"/>
     </body>
 
-    <!-- Tea bag: pillow bag + string (flexcomp, pinned to bag) + paper tag.
-         Bag and tag are geoms of one body so lifting the tag lifts the bag. -->
+    <!-- Tea bag: pillow bag + string (flexcomp, pinned to bag and handle knob)
+         + orange 3D-printed handle. Bag and handle are geoms of one body so
+         lifting the handle lifts the bag. -->
     <body name="tea_bag" pos=".12 -.55 .49">
       <freejoint/>
       <geom name="bag" type="box" size="{fmt(BAG_HALF)}" mass=".02" friction=".8 .1 .1"
             material="tea_bag"/>
-      <geom name="tag" type="box" size="{fmt(TAG_HALF)}" pos="{fmt(TAG_CENTER)}"
-            mass=".005" friction="1 .1 .1" material="tea_tag"/>
+      {handle_xml()}
       <flexcomp name="tea_string" type="direct" dim="1" mass=".004" radius=".0012"
                 rgba=".95 .95 .9 1" point="{pts}" element="{elems}">
         <pin id="0 {len(STRING_PTS) - 1}"/>
@@ -195,11 +233,8 @@ def main():
     here = Path(__file__).parent / 'assets'
     # real photo crops (CC0, see assets/LICENSE.txt) when present, else procedural
     bag = cv2.imread(str(here / 'tea_bag_photo.png'))
-    tag = cv2.imread(str(here / 'tea_tag_photo.png'))
     bag = tea_bag_texture() if bag is None else np.rot90(bag, BAG_ROT)
-    tag = tea_tag_texture() if tag is None else np.rot90(tag, TAG_ROT)
     cv2.imwrite(str(assets / 'tea_bag.png'), np.ascontiguousarray(bag))
-    cv2.imwrite(str(assets / 'tea_tag.png'), np.ascontiguousarray(tag))
     cv2.imwrite(str(assets / 'paper_cup.png'), paper_cup_texture())
     (models / 'scene.xml').write_text(scene_xml())
     print(f'wrote scene + textures to {models}')

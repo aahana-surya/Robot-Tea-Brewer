@@ -54,6 +54,18 @@ Terminal 4 (see camera feed, sim only):
 ros2 run rqt_image_view rqt_image_view /yolo_world/annotated_image  
 ```
 
+### Steep the tea bag (bag already in the gripper)
+After the yolo_world terminals above (the cup must be visible; use head_scan with
+`-r tea_tag/position:=cup/position` if needed):
+```bash
+ros2 run robot_tea_brewer steep_tea --ros-args -p dips:=3 -p dip_depth:=0.12 -p bag_drop:=0.12
+# dry run: -p execute:=false
+```
+
+### Code layout
+`stretch_motion.py` holds the shared motion code (`StretchMotion`, `TargetSampler`,
+`plan_hover`); `pregrasp.py` and `steep_tea.py` are thin scripts on top of it.
+
 ### Make the scene.xml:
 ```bash
 python3 src/Robot-Tea-Brewer/tools/make_scene.py
