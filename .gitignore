@@ -11,6 +11,7 @@ __pycache__/
 .mypy_cache/
 .venv/
 venv/
+robot_tea_brewer/__pycache__/
 
 # MuJoCo
 MUJOCO_LOG.TXT

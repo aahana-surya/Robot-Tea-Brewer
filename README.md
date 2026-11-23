@@ -3,7 +3,10 @@ Teaching the Stretch Robot to make your tea!
 
 # Stretch Commands
 
+Always build and source from the workspace root (`~/ros2_ws`), never from `src/` or this
+repo folder - that creates a second, stale `install/` that's easy to source by mistake.
 ```bash
+cd ~/ros2_ws
 colcon build --packages-select robot_tea_brewer
 source install/setup.bash
 source /opt/ros/humble/setup.bash
@@ -44,12 +47,22 @@ Terminal 2 (yolo world):
 ```bash
 ros2 run robot_tea_brewer yolo_world_localizer
 ```
-Terminal 3 (head scan, optional):
+Terminal 3 (head scan, optional - looks for the orange block):
 ```bash
-ros2 run robot_tea_brewer head_scan --ros-args -r tea_tag/position:=tea_bag/position
+ros2 run robot_tea_brewer head_scan
+```
+Terminal 4 (drive/extend to the hover pose above the orange block):
+```bash
+ros2 run robot_tea_brewer pregrasp
+```
+Terminal 5 (pick up the block - waits for pregrasp to publish `pregrasp/target`):
+```bash
+ros2 run robot_tea_brewer grasp
+# dry run: ros2 run robot_tea_brewer grasp --ros-args -p execute:=false
+# real robot: add -p use_sim_time:=false (same for pregrasp)
 ```
 
-Terminal 4 (see camera feed, sim only):
+Terminal 6 (see camera feed, sim only):
 ```bash
 ros2 run rqt_image_view rqt_image_view /yolo_world/annotated_image  
 ```

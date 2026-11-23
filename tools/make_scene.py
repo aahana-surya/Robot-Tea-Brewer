@@ -6,6 +6,9 @@ rewrites <models>/scene.xml with:
   * a pillow-shaped tea bag (stitched border, leaf shadow) with a cotton string
     and a printed paper tag, all on ONE rigid body (lift the tag -> bag follows)
   * a hollow white paper cup with a cardboard sleeve (open top, bag can drop in)
+  * a bright orange rectangular block (the grasp target): 1 x 1 in square
+    base, 3 in tall, standing upright (2x the real 0.5 x 0.5 x 1.5 in block so it
+    is big enough to detect in the low-res sim cameras)
 
 Usage:  python3 tools/make_scene.py [models_dir]
 """
@@ -28,6 +31,10 @@ TAG_CENTER = (0.110 + TAG_HALF[0], 0, TAG_HALF[2])
 
 BAG_ROT, TAG_ROT = 3, 2   # np.rot90 turns so photo features land on the right box ends
 CUP_R, CUP_HALF_H, CUP_WALL, CUP_SIDES = 0.045, 0.05, 0.0015, 20
+TABLE_TOP = 0.48
+IN = 0.0254
+BLOCK_HALF = (0.5 * IN, 0.5 * IN, 1.5 * IN)     # 1 x 1 in base, 3 in tall (2x real size)
+BLOCK_XY = (-0.22, -0.56)   # ~20 cm in x from the gripper at startup (x = -0.02), still in head-cam view
 
 
 def _noise(rng, h, w, sigma):
@@ -156,6 +163,7 @@ def scene_xml():
     <material name="tea_bag" texture="tea_bag" rgba=".72 .72 .72 1"/>
     <texture type="2d" name="tea_tag" file="tea_tag.png"/>
     <material name="tea_tag" texture="tea_tag" rgba=".85 .85 .85 1"/>
+    <material name="orange_block" rgba="1 .42 0 1" specular=".2" shininess=".3"/>
     <texture type="2d" name="paper_cup" file="paper_cup.png"/>
     <material name="paper_cup" texture="paper_cup" rgba="1 1 1 1"/>
   </asset>
@@ -180,6 +188,13 @@ def scene_xml():
         <pin id="0 {len(STRING_PTS) - 1}"/>
         <edge equality="true" stiffness="100" damping="1"/>
       </flexcomp>
+    </body>
+
+    <!-- Orange block: the grasp target (1 x 1 in base, 3 in tall, upright; 2x real size) -->
+    <body name="orange_block" pos="{fmt((*BLOCK_XY, TABLE_TOP + BLOCK_HALF[2]))}">
+      <freejoint/>
+      <geom name="orange_block" type="box" size="{fmt(BLOCK_HALF)}" mass=".03"
+            friction="1.5 .05 .01" condim="4" material="orange_block"/>
     </body>
 
     <!-- Paper cup (hollow, open top) -->
