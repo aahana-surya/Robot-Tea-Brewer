@@ -1,21 +1,23 @@
-"""ROS 2 node: pick up the orange block once the gripper is at the pregrasp pose.
+"""ROS 2 node: pick up the orange object once the gripper is at the pregrasp pose.
 
-The block stands upright. Sim block: 1 x 1 in square base, 3 in tall
-(0.0254 x 0.0254 x 0.0762 m) - 2x the real 0.5 x 0.5 x 1.5 in block; for the real
-one pass -p obj_width:=0.0127 -p obj_height:=0.0381. The fingers close across
-the square (along base x), `grasp_depth` below the block top.
+Default target: the orange tea-bag handle lying flat on the table, long axis
+along base x. It is gripped at its neck: 14 mm wide (y) x 14 mm thick (z)
+(`obj_width` / `obj_height`), centre `grasp_depth` below its top face.
 
 Waits for `pregrasp/target` (latched PointStamped in the fixed frame, published
 by the `pregrasp` node when it is done). Use the same `approach` as pregrasp.
 
-approach:=side (default) - gripper level, block taken from the side:
-  1. opens the gripper, wrist level (pitch 0),
-  2. sets the lift to grasp height while still `standoff` short of the block,
-  3. extends straight in so the block slides between the fingers,
-  4. closes the gripper (it stalls on the block), 5. lifts by `lift_height`.
+approach:=top (default) - gripper pointing down, rolled 90 deg (`wrist_roll`)
+so the fingers close along base y, ACROSS the handle:
+  1. opens the gripper, wrist down + rolled,
+  2. aligns the extension over the handle at hover height,
+  3. lowers the lift until the grasp centre is at the handle's mid-height
+     (if the fingertips touch the table first, closes from there),
+  4. closes the gripper (it stalls on the handle), 5. lifts by `lift_height`.
 
-approach:=top - gripper pointing down: aligns the extension over the block,
-then lowers the lift onto it, closes and lifts (pushes on tall blocks).
+approach:=side - gripper level, for an upright block: sets the lift to grasp
+height while `standoff` short, extends straight in (`insert_depth` past the
+centre), closes and lifts.
 
 DRY RUN with `-p execute:=false`: prints the plan and does not move.
 Run it alongside / after `pregrasp`; it starts as soon as the target arrives.
@@ -35,7 +37,6 @@ from tf2_ros import Buffer, TransformListener
 from robot_tea_brewer.pregrasp import (EXT_RANGE, LATCHED, LIFT_RANGE, ArmMotion,
                                        sim_time_overrides)
 
-IN = 0.0254
 GRIPPER = 'joint_gripper_finger_left'   # works in sim and on the real robot
 
 
@@ -49,13 +50,13 @@ class Grasp(ArmMotion, Node):
         d('action_name', '/stretch_controller/follow_joint_trajectory')
         d('arm_axis', [0.0, -1.0, 0.0])
         d('execute', True)
-        # block size, metres: square base side, height (standing upright)
-        d('obj_width', 1.0 * IN)     # sim block (real: 0.5 in)
-        d('obj_height', 3.0 * IN)    # sim block (real: 1.5 in)
-        d('grasp_depth', 0.02)       # m, grasp centre below the block top
+        # gripped part, metres: width across the fingers, height (vertical extent)
+        d('obj_width', 0.014)        # handle neck (sim, 1.75x CAD scale)
+        d('obj_height', 0.014)       # handle thickness, lying flat
+        d('grasp_depth', 0.007)      # m, grasp centre below the top (= mid-height)
         d('max_xy_err', 0.015)       # m, abort if the gripper is further off the block
         d('table_clearance', 0.004)  # m, keep grasp centre this far above the block bottom
-        approach = d('approach', 'side').value      # 'side' or 'top', as in pregrasp
+        approach = d('approach', 'top').value       # 'top' or 'side', as in pregrasp
         if approach not in ('side', 'top'):
             raise ValueError(f"approach must be 'side' or 'top', got {approach!r}")
         self.approach = approach
@@ -65,7 +66,14 @@ class Grasp(ArmMotion, Node):
         # link_grasp_center sits near the fingertips, so without this only the tips
         # touch the block.
         d('insert_depth', 0.02)
-        d('wrist_yaw', 0.0)          # square base, so yaw only matters if the block is rotated
+        d('wrist_yaw', 0.0)
+        # top: roll 90 deg so the fingers close along base y, across a handle lying
+        # along base x (use 0.0 if the object's narrow side is along x)
+        d('wrist_roll', 1.57 if approach == 'top' else 0.0)
+        # top: if the fingertips reach the table before the grasp centre reaches its
+        # goal, close anyway when within this much (and stop pushing the lift down)
+        d('contact_tol', 0.015)
+        d('max_push', 0.02)          # m, max extra lift-down correction beyond the plan
         d('gripper_open', 0.4)       # joint_gripper_finger_left (rad-ish units)
         d('gripper_close', -0.2)     # past contact -> squeezes the block
         d('lift_height', 0.10)       # m to raise the block after grasping
@@ -132,6 +140,7 @@ class Grasp(ArmMotion, Node):
         command (re-sending the same target would not help).
         """
         g = lambda n: self.get_parameter(n).value  # noqa: E731
+        floor = max(lift_cmd - g('max_push'), LIFT_RANGE[0])   # don't ram the table
         self.move_joints(['joint_lift'], [lift_cmd], secs=g('approach_secs'))
         for attempt in range(3):
             time.sleep(0.5)
@@ -139,10 +148,18 @@ class Grasp(ArmMotion, Node):
             self.get_logger().info(f'Grasp-centre height error (m): {err[2]:+.3f}')
             if abs(err[2]) <= g('z_tol'):
                 return lift_cmd
+            new_cmd = min(max(lift_cmd + float(err[2]), floor), LIFT_RANGE[1])
+            # still above the goal but the lift can't go lower (fingertips on the table)
+            blocked = err[2] < 0 and (attempt == 2 or new_cmd == lift_cmd)
+            if blocked and self.approach == 'top' and -err[2] <= g('contact_tol'):
+                self.get_logger().warn(
+                    f'grasp centre {-err[2]:.3f} m above the goal - fingertips probably on '
+                    'the table; closing from here')
+                return lift_cmd
             if attempt == 2:
                 raise RuntimeError(f'grasp centre still {err[2]:+.3f} m off in z - '
                                    'lift blocked? (not closing the gripper)')
-            lift_cmd = min(max(lift_cmd + float(err[2]), LIFT_RANGE[0]), LIFT_RANGE[1])
+            lift_cmd = new_cmd
             self.move_joints(['joint_lift'], [lift_cmd])
 
     def extend_to(self, target_fixed):
@@ -182,8 +199,8 @@ class Grasp(ArmMotion, Node):
 
             # 1. open + orient (wrist changes move the grasp centre -> replan after)
             self.move_joints([GRIPPER], [g('gripper_open')])
-            self.move_joints(['joint_wrist_pitch', 'joint_wrist_yaw'],
-                             [g('wrist_pitch'), g('wrist_yaw')])
+            self.move_joints(['joint_wrist_pitch', 'joint_wrist_yaw', 'joint_wrist_roll'],
+                             [g('wrist_pitch'), g('wrist_yaw'), g('wrist_roll')])
             time.sleep(0.5)
             p = self.plan(target_fixed)
             if self.approach == 'side':

@@ -2,8 +2,9 @@
 
 Reads the target position from `orange_block/position` (published by
 yolo_world_localizer, base_link frame; override with `-p tag_topic:=...`), then:
-  1. sets the wrist: level (pitch 0, `approach:=side`, default) or pointing
-     down (pitch -1.57, `approach:=top`),
+  1. sets the wrist: pointing down and rolled 90 deg (pitch -1.57, roll 1.57,
+     `approach:=top`, default - for the flat orange handle) or level
+     (pitch 0, `approach:=side` - for an upright block),
   2. drives the base forward/back so the gripper is level with the tag in x,
   3. moves the lift to the pregrasp height (arm still retracted),
   4. extends the arm until the gripper is `standoff` short of the object (side)
@@ -207,8 +208,9 @@ class Pregrasp(ArmMotion, Node):
         # 'side': gripper level (pitch 0), stops `standoff` short of the object at
         #         about grasp height; `grasp` then extends straight in.
         # 'top' : gripper pointing down, `hover` above the object.
-        self.declare_parameter('approach', 'side')
+        self.declare_parameter('approach', 'top')
         self.declare_parameter('hover', 0.10)       # m above tag (top)
+        self.declare_parameter('wrist_roll', 1.57)  # top: fingers close along base y
         self.declare_parameter('standoff', 0.08)    # m short of the object along the arm (side)
         self.declare_parameter('side_z', 0.02)      # m above the detected centre (side)
         self.declare_parameter('samples', 10)
@@ -227,10 +229,10 @@ class Pregrasp(ArmMotion, Node):
         if self.approach == 'side':
             self.offset = (-g('standoff') * np.asarray(self.arm_axis, float)
                            + [0.0, 0.0, g('side_z')])
-            self.wrist_pitch = 0.0
+            self.wrist_pitch, self.wrist_roll = 0.0, 0.0
         elif self.approach == 'top':
             self.offset = np.array([0.0, 0.0, g('hover')])
-            self.wrist_pitch = -1.57
+            self.wrist_pitch, self.wrist_roll = -1.57, g('wrist_roll')
         else:
             raise ValueError(f"approach must be 'side' or 'top', got {self.approach!r}")
         self.execute, self.speed = g('execute'), g('base_speed')
@@ -358,7 +360,8 @@ class Pregrasp(ArmMotion, Node):
             if self.approach == 'side' and self.joints['wrist_extension'] > 0.05:
                 self.move_joints(['wrist_extension'], [0.0])
             # 1. wrist level (side) / straight down (top), so grasp-center offsets are final
-            self.move_joints(['joint_wrist_pitch', 'joint_wrist_yaw'], [self.wrist_pitch, 0.0])
+            self.move_joints(['joint_wrist_pitch', 'joint_wrist_yaw', 'joint_wrist_roll'],
+                             [self.wrist_pitch, 0.0, self.wrist_roll])
             time.sleep(0.5)
             # 2. base x alignment
             self.ensure_navigation_mode()
